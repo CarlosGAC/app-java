@@ -44,12 +44,33 @@ public class MovieService {
      */
     // tag::all[]
     public List<Map<String,Object>> all(Params params, String userId) {
-        // TODO: Open an Session
-        // TODO: Execute a query in a new Read Transaction
-        // TODO: Get a list of Movies from the Result
-        // TODO: Close the session
+        // Open a new Session
+        try (var session = driver.session()) {
+            // Execute a query in a new Read Transaction
+            var movies = session.executeRead(tx -> {
+                // Get an array of IDs for the User's favorite movies
+                var favorites = getUserFavorites(tx, userId);
 
-        return AppUtils.process(popular, params);
+                // Retrieve a list of movies with the
+                // favorite flag appened to the movie's properties
+                Params.Sort sort = params.sort(Params.Sort.title);
+                String query = String.format("""
+                                MATCH (m:Movie)
+                                WHERE m.`%s` IS NOT NULL
+                                RETURN m {
+                                  .*,
+                                  favorite: m.tmdbId IN $favorites
+                                } AS movie
+                                ORDER BY m.`%s` %s
+                                SKIP $skip
+                                LIMIT $limit
+                                """, sort, sort, params.order());
+                var res= tx.run(query, Values.parameters( "skip", params.skip(), "limit", params.limit(), "favorites",favorites));
+                // Get a list of Movies from the Result
+                return res.list(row -> row.get("movie").asMap());
+            });
+            return movies;
+        }
     }
     // end::all[]
 
@@ -197,7 +218,14 @@ public class MovieService {
      */
     // tag::getUserFavorites[]
     private List<String> getUserFavorites(TransactionContext tx, String userId) {
-        return List.of();
+        // If userId is not defined, return an empty list
+        if (userId == null) return List.of();
+        var favoriteResult =  tx.run("""
+                MATCH (u:User {userId: $userId})-[:HAS_FAVORITE]->(m)
+                RETURN m.tmdbId AS id
+            """, Values.parameters("userId",userId));
+        // Extract the `id` value returned by the cypher query
+        return favoriteResult.list(row -> row.get("id").asString());
     }
     // end::getUserFavorites[]
 
